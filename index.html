@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>稅務小豆腐｜租金與執行業務試算</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM (正確的順序與全域變數處理) -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; }
+        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // 顯式宣告 React 全域變數以防萬一
+        const { useState, useEffect } = window.React;
+
+        // Lucide Icon Wrapper Component
+        const Icon = ({ name, size = 16, className = "" }) => {
+            useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            }, [name]);
+            return <i data-lucide={name} className={className} style={{ width: size, height: size }}></i>;
+        };
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('rent');
+            const [landlordType, setLandlordType] = useState('local');
+            const [isResident, setIsResident] = useState(true);
+            const [hasNHI, setHasNHI] = useState(true);
+            const [calcMode, setCalcMode] = useState('gross');
+            const [inputValue, setInputValue] = useState('');
+            const [copied, setCopied] = useState(false);
+
+            const [results, setResults] = useState({
+                gross: 0, withholding: 0, nhi: 0, vat: 0, net: 0,
+                taxRateDisplay: 0, totalDeduction: 0
+            });
+
+            const WITHHOLDING_THRESHOLD_TAX = 2000;
+            const NHI_THRESHOLD_VAL = 20000;
+
+            useEffect(() => {
+                if (activeTab === 'rent') {
+                    if (landlordType === 'local' || landlordType === 'company') {
+                        setHasNHI(true); setIsResident(true);
+                    } else if (landlordType === 'foreigner') {
+                        setIsResident(false);
+                    }
+                } else {
+                    if (!['person', 'foreign_pro', 'office'].includes(landlordType)) {
+                        setLandlordType('person');
+                    }
+                    if (landlordType === 'person' || landlordType === 'office') {
+                        setIsResident(true);
+                    }
+                }
+            }, [activeTab, landlordType]);
+
+            useEffect(() => {
+                calculate();
+                if (window.lucide) window.lucide.createIcons();
+            }, [inputValue, calcMode, activeTab, landlordType, hasNHI, isResident]);
+
+            const calculate = () => {
+                const amount = parseFloat(inputValue) || 0;
+                let baseTaxRate = 0.10;
+                let nhiRate = 0.0211;
+                let isNonResident20 = false;
+                let isCompanyVAT = false;
+
+                if (activeTab === 'rent') {
+                    if (landlordType === 'company') {
+                        isCompanyVAT = true; baseTaxRate = 0; nhiRate = 0;
+                    } else if (landlordType === 'foreigner') {
+                        if (!isResident) { baseTaxRate = 0.20; isNonResident20 = true; }
+                        if (!hasNHI) nhiRate = 0;
+                    }
+                } else {
+                    if (landlordType === 'office') {
+                        baseTaxRate = 0.10; nhiRate = 0;
+                    } else if (landlordType === 'foreign_pro') {
+                        if (!isResident) { baseTaxRate = 0.20; isNonResident20 = true; }
+                        if (!hasNHI) nhiRate = 0;
+                    } else {
+                        baseTaxRate = 0.10; nhiRate = 0.0211;
+                    }
+                }
+
+                const forwardCalculate = (g) => {
+                    let w = 0, n = 0, v = 0;
+                    if (isCompanyVAT) {
+                        v = Math.round(g - (g / 1.05));
+                        return { w: 0, n: 0, v, net: Math.round(g) - v };
+                    } else {
+                        const potentialTax = Math.floor(g * baseTaxRate);
+                        w = isNonResident20 ? potentialTax : (potentialTax > WITHHOLDING_THRESHOLD_TAX ? potentialTax : 0);
+                        if (nhiRate > 0 && Math.round(g) >= NHI_THRESHOLD_VAL) n = Math.round(g * nhiRate);
+                        return { w, n, v: 0, net: Math.round(g) - w - n };
+                    }
+                };
+
+                let finalGross = 0, finalWithholding = 0, finalNhi = 0, finalVat = 0, finalNet = 0;
+
+                if (calcMode === 'gross') {
+                    finalGross = Math.round(amount);
+                    const res = forwardCalculate(finalGross);
+                    finalWithholding = res.w; finalNhi = res.n; finalVat = res.v; finalNet = res.net;
+                } else {
+                    if (isCompanyVAT) {
+                        finalGross = Math.round(amount * 1.05);
+                        finalVat = Math.round(finalGross - amount);
+                        finalNet = Math.round(amount);
+                    } else {
+                        let curTR = 0, curNR = 0;
+                        if (isNonResident20) curTR = 0.20;
+                        else if (baseTaxRate > 0 && amount >= 18010) curTR = baseTaxRate;
+                        
+                        if (nhiRate > 0) {
+                            const check = 1 - curTR - nhiRate;
+                            if (amount / check >= NHI_THRESHOLD_VAL - 0.01) curNR = nhiRate;
+                            else if (curTR === 0 && amount / (1 - nhiRate) >= NHI_THRESHOLD_VAL - 0.01) curNR = nhiRate;
+                        }
+                        
+                        let trialGross = Math.round(amount / (1 - curTR - curNR));
+                        let trialRes = forwardCalculate(trialGross);
+                        if (trialRes.net > amount) {
+                            finalGross = trialGross - 1;
+                            const fRes = forwardCalculate(finalGross);
+                            finalWithholding = fRes.w; finalNhi = fRes.n; finalNet = fRes.net;
+                        } else {
+                            finalGross = trialGross;
+                            finalWithholding = trialRes.w; finalNhi = trialRes.n; finalNet = trialRes.net;
+                        }
+                    }
+                }
+
+                setResults({
+                    gross: finalGross, withholding: finalWithholding, nhi: finalNhi, vat: finalVat, net: finalNet,
+                    taxRateDisplay: (finalWithholding > 0) ? (isNonResident20 ? 20 : 10) : 0,
+                    totalDeduction: isCompanyVAT ? finalVat : (finalWithholding + finalNhi)
+                });
+            };
+
+            const copyResults = () => {
+                const label = activeTab === 'rent' ? '租金所得' : '執行業務所得';
+                const subLabel = activeTab === 'rent' ? '租金總額' : '執行業務總額';
+                const netLabel = activeTab === 'rent' ? '實際支付租金' : '實際支付淨額';
+                const idLabel = activeTab === 'rent' 
+                    ? { local: '本國個人房東', foreigner: `外國個人房東(${isResident ? '居住者' : '非居住者'})`, company: '公司法人房東' }[landlordType]
+                    : { person: '本國個人所得人', foreign_pro: `外國個人所得人(${isResident ? '居住者' : '非居住者'})`, office: '事務所' }[landlordType];
+                const personLabel = activeTab === 'rent' ? '房東' : '所得人';
+
+                let lines = "";
+                if (landlordType === 'company' && activeTab === 'rent') {
+                    lines = `  銷售額 (未稅)　：${results.net.toLocaleString().padStart(7)} 元\n+營業稅 (5%)　　：${results.vat.toLocaleString().padStart(7)} 元\n--------------------------------\n${subLabel} (含稅)：${results.gross.toLocaleString().padStart(7)} 元`;
+                } else {
+                    const taxRate = results.taxRateDisplay === 0 && results.withholding === 0 ? (isResident ? 10 : 20) : (results.taxRateDisplay === 0 ? 10 : results.taxRateDisplay);
+                    lines = `  ${subLabel}：${results.gross.toLocaleString().padStart(8)} 元\n-扣繳稅額 (${taxRate}%)${taxRate < 10 ? ' ' : ''} ：${results.withholding.toLocaleString().padStart(7)} 元\n-二代健保 (2.11%)：${results.nhi.toLocaleString().padStart(7)} 元\n--------------------------------\n${netLabel}：${results.net.toLocaleString().padStart(8)} 元`;
+                }
+
+                const text = `【稅務小豆腐｜${label}試算】\n${personLabel}：${idLabel}\n--------------------------------\n${lines}`;
+                const textArea = document.createElement("textarea");
+                textArea.value = text; document.body.appendChild(textArea); textArea.select();
+                document.execCommand('copy'); document.body.removeChild(textArea);
+                setCopied(true); setTimeout(() => setCopied(false), 2000);
+            };
+
+            const IdentityTab = ({ active, onClick, icon, label }) => (
+                <button onClick={onClick} className={`flex-1 flex flex-col items-center justify-center py-3 rounded-xl transition-all ${active ? 'bg-white text-amber-500 shadow-sm scale-105 border border-amber-100' : 'text-slate-400 hover:text-slate-500'}`}>
+                    <Icon name={icon} size={16} />
+                    <span className="text-[9px] font-black mt-1 uppercase tracking-tighter">{label}</span>
+                </button>
+            );
+
+            const isCompanyRent = landlordType === 'company' && activeTab === 'rent';
+            const labelPrefix = activeTab === 'rent' ? '租金所得' : '執行業務所得';
+
+            return (
+                <div className="min-h-screen bg-[#FFFBEB] text-slate-700 pb-12">
+                    <div className="bg-white shadow-sm mb-8">
+                        <div className="max-w-2xl mx-auto flex">
+                            <button onClick={() => setActiveTab('rent')} className={`flex-1 py-4 font-bold text-center border-b-4 ${activeTab === 'rent' ? 'border-amber-400 text-amber-500 bg-amber-50/30' : 'border-transparent text-slate-400'}`}>租金所得</button>
+                            <button onClick={() => setActiveTab('professional')} className={`flex-1 py-4 font-bold text-center border-b-4 ${activeTab === 'professional' ? 'border-amber-400 text-amber-500 bg-amber-50/30' : 'border-transparent text-slate-400'}`}>執行業務所得</button>
+                        </div>
+                    </div>
+
+                    <div className="max-w-2xl mx-auto px-4">
+                        <div className="flex bg-white/60 p-1.5 rounded-2xl mb-4 gap-1.5 border border-amber-100">
+                            {activeTab === 'rent' ? (
+                                <>
+                                    <IdentityTab active={landlordType === 'local'} onClick={() => setLandlordType('local')} icon="user" label="本國個人房東" />
+                                    <IdentityTab active={landlordType === 'foreigner'} onClick={() => setLandlordType('foreigner')} icon="globe" label="外國個人房東" />
+                                    <IdentityTab active={landlordType === 'company'} onClick={() => setLandlordType('company')} icon="building-2" label="公司法人" />
+                                </>
+                            ) : (
+                                <>
+                                    <IdentityTab active={landlordType === 'person'} onClick={() => setLandlordType('person')} icon="user" label="本國個人" />
+                                    <IdentityTab active={landlordType === 'foreign_pro'} onClick={() => setLandlordType('foreign_pro')} icon="globe" label="外國個人" />
+                                    <IdentityTab active={landlordType === 'office'} onClick={() => setLandlordType('office')} icon="briefcase" label="事務所" />
+                                </>
+                            )}
+                        </div>
+
+                        {((landlordType === 'foreigner' && activeTab === 'rent') || (landlordType === 'foreign_pro' && activeTab === 'professional')) && (
+                            <div className="grid grid-cols-2 gap-3 mb-6">
+                                <button onClick={() => setIsResident(!isResident)} className={`flex items-center justify-center gap-2 p-3 rounded-xl border-2 font-bold transition-all ${isResident ? 'bg-amber-400 border-amber-400 text-white shadow-md' : 'bg-white border-slate-100 text-slate-400'}`}><Icon name="calendar" /> {isResident ? '居住者 (滿183天)' : '非居住者 (未滿183天)'}</button>
+                                <button onClick={() => setHasNHI(!hasNHI)} className={`flex items-center justify-center gap-2 p-3 rounded-xl border-2 font-bold transition-all ${hasNHI ? 'bg-blue-400 border-blue-400 text-white shadow-md' : 'bg-white border-slate-100 text-slate-400'}`}><Icon name="heart" /> {hasNHI ? '有投保健保' : '未投保健保'}</button>
+                            </div>
+                        )}
+
+                        <div className="bg-white rounded-[2.5rem] shadow-xl overflow-hidden border border-amber-100">
+                            <div className="p-8">
+                                <div className="grid grid-cols-2 gap-3 mb-8 bg-slate-50 p-1.5 rounded-2xl">
+                                    <button onClick={() => setCalcMode('gross')} className={`py-3 rounded-xl font-black text-sm transition-all ${calcMode === 'gross' ? 'bg-white text-amber-500 shadow-sm' : 'text-slate-400'}`}>{labelPrefix}已含稅</button>
+                                    <button onClick={() => setCalcMode('net')} className={`py-3 rounded-xl font-black text-sm transition-all ${calcMode === 'net' ? 'bg-white text-amber-500 shadow-sm' : 'text-slate-400'}`}>{labelPrefix}未含稅{isCompanyRent ? '' : ' (實拿)'}</button>
+                                </div>
+
+                                <div className="mb-10 relative group">
+                                    <label className="text-[10px] font-black text-amber-500 bg-white px-2 absolute -top-2 left-4 z-10 uppercase tracking-widest">{calcMode === 'gross' ? `＊ ${labelPrefix} (含稅)` : `＊ ${labelPrefix} (${isCompanyRent ? '未稅' : '實拿'})`}</label>
+                                    <div className="flex items-center bg-slate-50 rounded-3xl p-6 border-2 border-transparent focus-within:border-amber-200 focus-within:bg-amber-50 transition-all">
+                                        <span className="text-3xl font-black text-slate-300 mr-3">$</span>
+                                        <input type="number" value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder="0" className="bg-transparent border-none focus:ring-0 text-4xl font-black w-full text-slate-800 placeholder-slate-200 outline-none" />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4 bg-amber-50/30 rounded-[2rem] p-6 border border-amber-100/50">
+                                    {isCompanyRent ? (
+                                        <>
+                                            <div className="flex justify-between items-center px-2">
+                                                <span className="text-sm font-bold text-slate-500 italic">＊ 銷售額 (未稅淨額)</span>
+                                                <span className="text-xl font-black text-slate-800">${results.net.toLocaleString()}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center px-2">
+                                                <span className="text-sm font-bold text-slate-400 italic">＊ 營業稅 (5%)</span>
+                                                <span className="text-xl font-black text-amber-500">+${results.vat.toLocaleString()}</span>
+                                            </div>
+                                            <div className="h-px bg-amber-200 w-full my-2"></div>
+                                            <div className="flex justify-between items-center px-2 pt-2">
+                                                <span className="text-sm font-black text-slate-600">＊ {labelPrefix} (含稅)</span>
+                                                <span className="text-3xl font-black text-slate-800">${results.gross.toLocaleString()}</span>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <div className="flex justify-between items-center px-2">
+                                                <span className="text-sm font-bold text-slate-500">＊ {labelPrefix}（含稅總額）</span>
+                                                <span className="text-xl font-black text-slate-800">${results.gross.toLocaleString()}</span>
+                                            </div>
+                                            <div className="h-px bg-amber-100 w-full my-2"></div>
+                                            <div className="flex justify-between items-center px-2">
+                                                <span className="text-sm font-bold text-slate-400 italic">－ 扣繳所得稅 ({results.taxRateDisplay}%)</span>
+                                                <span className="text-lg font-black text-rose-400">-${results.withholding.toLocaleString()}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center px-2">
+                                                <span className="text-sm font-bold text-slate-400 italic">－ 二代健保 (2.11%)</span>
+                                                <span className="text-lg font-black text-blue-400">-${results.nhi.toLocaleString()}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center px-4 py-3 bg-white rounded-2xl shadow-sm border border-amber-100">
+                                                <span className="text-sm font-black text-amber-600">＝ 扣繳與二代健保合計 (代扣總額)</span>
+                                                <span className="text-xl font-black text-amber-500">${results.totalDeduction.toLocaleString()}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center px-2 pt-2">
+                                                <span className="text-sm font-black text-slate-600">＊ 實際支付金額（房東實拿）</span>
+                                                <span className="text-3xl font-black text-slate-800">${results.net.toLocaleString()}</span>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+
+                                <div className="mt-8 flex gap-4">
+                                    <button onClick={() => { setInputValue(''); setCopied(false); }} className="w-16 h-16 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center hover:bg-slate-200 transition-all"><Icon name="refresh-cw" size={24} /></button>
+                                    <button onClick={copyResults} className="flex-1 rounded-2xl bg-amber-400 text-white font-black text-xl flex items-center justify-center gap-3 hover:bg-amber-500 shadow-lg shadow-amber-200 transition-all active:scale-95">
+                                        {copied ? <Icon name="check-circle-2" size={24}/> : <Icon name="copy" size={24}/>}
+                                        {copied ? '已複製結果' : '複製試算結果'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="mt-8 bg-white/50 rounded-3xl p-6 border border-amber-100 text-[11px] text-slate-500 font-bold space-y-2.5 leading-relaxed">
+                             <div className="flex items-center gap-2 text-amber-600 font-black mb-1.5 text-sm italic"><Icon name="info" size={18} />小豆腐筆記</div>
+                             {isCompanyRent ? (
+                               <>
+                                 <p>• <strong>公司法人</strong>：不需代扣所得稅與健保，但需計算 5% 營業稅以釐清銷售額與稅額。</p>
+                                 <p className="text-amber-700 font-black">※ 溫馨提醒：房東為公司法人需開立發票，房客記得索取統一發票以維護權益。</p>
+                               </>
+                             ) : (
+                               <>
+                                 <p>• <strong>所得稅</strong>：稅額超過 $2,000 門檻才扣繳（居住者10% / 非居住者20%）。</p>
+                                 <p>• <strong>二代健保</strong>：單次給付達 $20,000 以上需扣 2.11%（事務所身分免扣）。</p>
+                               </>
+                             )}
+                             {activeTab === 'rent' && landlordType !== 'company' && (
+                                <p className="text-amber-600 bg-amber-100/30 p-2 rounded-lg border border-amber-200/50 font-black italic">
+                                    * 租金若有多位房東，請依照「所有權比例」分開計算每位房東的租金總額。
+                                </p>
+                             )}
+                             {activeTab === 'professional' && (
+                                <p className="text-slate-600 bg-amber-100/30 p-2 rounded-lg border border-amber-200/50 font-black italic">
+                                    * 執行業務所得記得要請所得人填寫「勞務報酬單」，如果是事務所請對方開立收據。
+                                </p>
+                             )}
+                             <div className="space-y-2 pt-2 border-t border-amber-200/50">
+                               <p className="flex items-start gap-2">
+                                 <span className="mt-1 text-amber-500">•</span>
+                                 <span>如有扣繳金額，要記得去國稅局網站印製 
+                                   <a href="https://www.etax.nat.gov.tw/etwmain/etw144w/152" target="_blank" className="text-blue-500 hover:underline inline-flex items-center gap-0.5 mx-1 font-black">「所得扣繳稅額繳款書」<Icon name="external-link" size={10}/></a> 
+                                   並準時完成繳納。
+                                 </span>
+                               </p>
+                               <p className="flex items-start gap-2">
+                                 <span className="mt-1 text-amber-500">•</span>
+                                 <span>如有二代健保金額，要記得去健保局網站印製 
+                                   <a href="https://eservice.nhi.gov.tw/2nd/" target="_blank" className="text-blue-500 hover:underline inline-flex items-center gap-0.5 mx-1 font-black">「二代健保繳款書」<Icon name="external-link" size={10}/></a> 
+                                   並準時完成繳納。
+                                 </span>
+                               </p>
+                               <p className="flex items-start gap-2"><span className="mt-1 text-amber-500">•</span>隔年一月時，公司要記得完成「扣繳所得」及「二代健保」明細的申報。</p>
+                             </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 使用更穩定的初始化方式
+        const container = document.getElementById('root');
+        const root = window.ReactDOM.createRoot(container);
+        root.render(<App />);
+    </script>
+</body>
+</html>
